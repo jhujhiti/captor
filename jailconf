@@ -20,11 +20,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-BASELINKS="bin sbin lib libexec rescue usr/bin usr/include usr/lib usr/lib32 usr/libexec usr/sbin usr/share"
+SCRIPTPATH=`realpath $0`
+SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
 
-log() {
-    echo $1
-}
+. ${SCRIPTPREFIX}/common.sh
+
+BASELINKS="bin sbin lib libexec rescue usr/bin usr/include usr/lib usr/lib32 usr/libexec usr/sbin usr/share"
 
 usage() {
     cat - <<EOF
@@ -34,11 +35,6 @@ $0 <action> <subject> <further options>
     destroy jail <name>
     bootstrap jail <name> [path/url to bootstrap.sh]
 EOF
-}
-
-errexit() {
-    >&2 echo $1
-    exit 1
 }
 
 badusage() {
@@ -117,29 +113,6 @@ subr_bootstrap_jail() {
     else
         log "$name will not be restarted. You may need to restart it manually"
     fi
-}
-
-exists_in_config() {
-    name=$1
-    grep "$name[[:space:]]*{" /etc/jail.conf >/dev/null
-    return $?
-}
-
-jail_running() {
-    jls -dnj "$1" >/dev/null 2>&1
-    [ $? -eq 0 ] && return 0
-    return 1
-}
-
-jail_config() {
-    cat - <<EOF
-$1 {
-    host.hostname = "$1";
-    path = /jail/$1;
-    ip4.addr = $3;
-    mount = "/jail/source/$2 /jail/$1/basejail nullfs ro 0 0";
-}
-EOF
 }
 
 action=$1
