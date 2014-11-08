@@ -1,0 +1,154 @@
+#!/bin/sh
+
+# Copyright (c) 2014 Erick Turnquist <jhujhiti@adjectivism.org>
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+BASELINKS="bin sbin lib libexec rescue usr/bin usr/include usr/lib usr/lib32 usr/libexec usr/sbin usr/share"
+
+log() {
+    echo $1
+}
+
+usage() {
+    cat - <<EOF
+Usage:
+$0 <action> <subject> <further options>
+    create jail <name> <source> <ip>
+    destroy jail <name>
+    bootstrap jail <name> [path/url to bootstrap.sh]
+EOF
+}
+
+errexit() {
+    >&2 echo $1
+    exit 1
+}
+
+badusage() {
+    >&2 (usage)
+    exit 1
+}
+
+subr_create_jail() {
+    name=$1
+    source=$2
+    ip=$3
+
+    [ -n "$name" -a -n "$source" -a -n "$ip" ] || badusage
+    exists_in_config "$name" && errexit "$name already exists in jail.conf"
+
+    newzfs="$(df -t zfs /jail | tail -n 1 | cut -f1 -d" ")/${name}"
+    log "Creating ZFS filesystem at $newzfs"
+    zfs create "$newzfs"
+
+    log "Making directories and linking to source jail"
+    mkdir "/jail/${name}/basejail" "/jail/${name}/usr"
+    for d in ${BASELINKS}
+    do
+        ln -s /basejail/$d /jail/"${name}"/$d
+    done
+
+    # extract everything that isn't already covered by the basejail
+    log "Extracting base"
+    (for d in ${BASELINKS}; do echo "--exclude ./${d}"; done) | xargs tar xJf /jail/source/"${source}"/distrib/base.txz -C /jail/"${name}"
+
+    log "Adding jail to jail.conf"
+    (jail_config $@) >> /etc/jail.conf
+}
+
+subr_destroy_jail() {
+    name=$1
+
+    [ -n "$name" ] || badusage
+    exists_in_config "$name" || errexit "$name does not exist in jail.conf"
+    jail_running $name && errexit "$name is still running - stop it first"
+
+    zfs="$(df -t zfs "/jail/${name}" | tail -n 1 | cut -f1 -d" ")"
+    log "Destroying ZFS filesystem at $zfs"
+    zfs destroy "$zfs"
+
+    log "Removing from jail.conf"
+    sed -i -e "/^${name}[[:space:]]*{/,/^}/ d" /etc/jail.conf
+}
+
+subr_bootstrap_jail() {
+    name=$1
+    bootstrap_path=${2:-bootstrap.sh}
+
+    [ -n "$name" ] || badusage
+    exists_in_config "$name" || errexit "$name does not exist in jail.conf"
+    [ -d "/jail/$name" ] || errexit "Can't find /jail/$name"
+
+    jail_running $1
+    running=$?
+
+    if [ $running -ne 0 ]; then
+        log "$name is not running. Starting it"
+        jail -c "$name" >/dev/null 2>&1
+        [ $? -eq 0 ] || errexit "Error starting jail"
+    fi
+
+    log "Bootstrapping"
+    cp /etc/resolv.conf "/jail/$name/etc/resolv.conf"
+    fetch -o "/jail/$name/tmp/bootstrap.sh" "$bootstrap_path" >/dev/null 2>&1 || errexit "Error fetching $bootstrap_path"
+    jexec "$name" sh /tmp/bootstrap.sh
+    rm "/jail/$name/tmp/bootstrap.sh"
+
+    if [ $running -ne 0 ]; then
+        log "Stopping jail"
+        jail -r "$name" >/dev/null 2>&1
+    else
+        log "$name will not be restarted. You may need to restart it manually"
+    fi
+}
+
+exists_in_config() {
+    name=$1
+    grep "$name[[:space:]]*{" /etc/jail.conf >/dev/null
+    return $?
+}
+
+jail_running() {
+    jls -dnj "$1" >/dev/null 2>&1
+    [ $? -eq 0 ] && return 0
+    return 1
+}
+
+jail_config() {
+    cat - <<EOF
+$1 {
+    host.hostname = "$1";
+    path = /jail/$1;
+    ip4.addr = $3;
+    mount = "/jail/source/$2 /jail/$1/basejail nullfs ro 0 0";
+}
+EOF
+}
+
+action=$1
+shift
+subject=$1
+shift
+
+[ "$action" == "help" ] && { usage; exit 0; }
+
+subr="subr_${action}_${subject}"
+type "$subr" >/dev/null 2>&1 || { usage; errexit "\"$action $subject\" invalid command"; }
+$subr $@
