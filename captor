@@ -55,7 +55,7 @@ subr_create_jail() {
     zfs create "$newzfs"
 
     log "Making directories and linking to source jail"
-    mkdir "/jail/${name}/basejail" "/jail/${name}/usr"
+    mkdir "/jail/${name}/basejail" "/jail/${name}/usr" "/jail/${name}/home"
     for d in ${BASELINKS}
     do
         ln -s /basejail/$d /jail/"${name}"/$d
