@@ -47,8 +47,20 @@ $1 {
     host.hostname = "$1";
     path = /jail/$1;
     ip4.addr = $3;
+    osrelease = "$(source_osrelease /jail/source/$2)";
+    osreldate = "$(source_osreldate /jail/source/$2)";
     mount = "/jail/source/$2 /jail/$1/basejail nullfs ro 0 0";
 }
 EOF
+}
+
+source_osrelease() {
+    $1/bin/freebsd-version -u
+    return 0
+}
+
+source_osreldate() {
+    awk '/#define[[:space:]]+__FreeBSD_version/ { print $3; }' $1/usr/include/sys/param.h
+    return 0
 }
 
